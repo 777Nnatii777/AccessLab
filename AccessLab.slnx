@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/backend/">
+    <Project Path="backend/AccessLab.Api/AccessLab.Api.csproj" />
+    <Project Path="backend/AccessLab.Application/AccessLab.Application.csproj" />
+    <Project Path="backend/AccessLab.Domain/AccessLab.Domain.csproj" />
+    <Project Path="backend/AccessLab.Infrastructure/AccessLab.Infrastructure.csproj" />
+  </Folder>
+</Solution>

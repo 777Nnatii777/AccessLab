@@ -1,0 +1,6 @@
+@AccessLab.Api_HostAddress = http://localhost:5285
+
+GET {{AccessLab.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

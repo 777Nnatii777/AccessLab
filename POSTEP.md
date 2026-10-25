@@ -23,3 +23,8 @@ Lekcja 2 — solution i projekty backendu.
 
 Problemy:
 Brak.
+
+utworzone cztery projekty backendu i referencje;
+działający GET /api/health;
+następna lekcja: React i pierwsze połączenie z API;
+faktycznie używane wersje narzędzi.
