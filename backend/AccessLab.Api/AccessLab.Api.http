@@ -1,6 +1,12 @@
-@AccessLab.Api_HostAddress = http://localhost:5285
+@AccessLab_Host = https://localhost:7068
 
-GET {{AccessLab.Api_HostAddress}}/weatherforecast/
+GET {{AccessLab_Host}}/api/health
 Accept: application/json
 
 ###
+GET {{AccessLab_Host}}/api/auth/csrf
+Accept: application/json
+
+###
+# For POST requests first obtain X-CSRF-TOKEN using GET /api/auth/csrf,
+# and send the corresponding cookie in the same client session.

@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="AccessLab.Domain/AccessLab.Domain.csproj" />
+  <Project Path="AccessLab.Application/AccessLab.Application.csproj" />
+  <Project Path="AccessLab.Infrastructure/AccessLab.Infrastructure.csproj" />
+  <Project Path="AccessLab.Api/AccessLab.Api.csproj" />
+</Solution>
