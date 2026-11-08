@@ -5,4 +5,7 @@
     <Project Path="backend/AccessLab.Domain/AccessLab.Domain.csproj" />
     <Project Path="backend/AccessLab.Infrastructure/AccessLab.Infrastructure.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AccessLab.BotTest/AccessLab.BotTest.csproj" />
+  </Folder>
 </Solution>

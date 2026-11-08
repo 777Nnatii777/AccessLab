@@ -1,6 +1,17 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { api, type Account, type Note, type Settings, type UserRow } from './api/client'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import ReCAPTCHA from 'react-google-recaptcha'
+import { api, ApiError, type Account, type Note, type SecurityEvent, type Settings, type UserRow } from './api/client'
 import './App.css'
+
+const recaptchaSiteKey: string = import.meta.env.VITE_RECAPTCHA_SITE_KEY ?? ''
+
+// Z odpowiedzi 423 (konto) lub 429 (IP) wyciąga moment końca blokady.
+function blockEnd(data: unknown): number | null {
+  if (typeof data !== 'object' || data === null) return null
+  const d = data as { lockedUntilUtc?: string; blockedUntilUtc?: string }
+  const until = d.lockedUntilUtc ?? d.blockedUntilUtc
+  return until ? new Date(until).getTime() : null
+}
 
 const roles = ['Administrator', 'Kierownik', 'Redaktor', 'Pracownik', 'Czytelnik']
 type SecretResult = { temporaryPassword?: string; expiresAtUtc?: string; created?: unknown[]; recoveryCodes?: string[]; secret?: string; otpauthUri?: string }
@@ -53,6 +64,25 @@ export default function App() {
   const [result, setResult] = useState('')
   const [secret, setSecret] = useState('')
   const [busy, setBusy] = useState(false)
+  const [events, setEvents] = useState<SecurityEvent[]>([])
+  const [captchaToken, setCaptchaToken] = useState('')
+  const captchaRef = useRef<ReCAPTCHA>(null)
+  const [blockedUntil, setBlockedUntil] = useState<number | null>(null)
+  const [now, setNow] = useState(() => Date.now())
+
+  // Odliczanie czasu blokady co sekundę.
+  useEffect(() => {
+    if (blockedUntil === null) return
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [blockedUntil])
+  const secondsLeft = blockedUntil === null ? 0 : Math.max(0, Math.ceil((blockedUntil - now) / 1000))
+
+  // Token reCAPTCHA jest jednorazowy, więc po każdej próbie trzeba zaznaczyć widget od nowa.
+  function resetCaptcha() { captchaRef.current?.reset(); setCaptchaToken('') }
+  const captcha = recaptchaSiteKey
+    ? <ReCAPTCHA ref={captchaRef} sitekey={recaptchaSiteKey} onChange={t => setCaptchaToken(t ?? '')} onExpired={() => setCaptchaToken('')} />
+    : <p className="status">Brak VITE_RECAPTCHA_SITE_KEY w frontend/.env.local</p>
 
   const isAdmin = account?.roles.includes('Administrator') ?? false
   const canWrite = account?.roles.some(r => ['Administrator', 'Kierownik', 'Redaktor', 'Pracownik'].includes(r)) ?? false
@@ -68,6 +98,7 @@ export default function App() {
         if (me.roles.includes('Administrator')) {
           setUsers(await api<UserRow[]>('/admin/users'))
           setSettings(await api<Settings>('/admin/settings'))
+          setEvents(await api<SecurityEvent[]>('/admin/security-events'))
         }
       }
     } catch { setAccount(null); setNotes([]); setUsers([]) }
@@ -84,15 +115,27 @@ export default function App() {
     } catch (e) { setResult(e instanceof Error ? e.message : String(e)) }
     finally { setBusy(false) }
   }
-  async function submitLogin(e: FormEvent) {
+  async function submitLogin(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
-    await run(async () => { await api('/auth/login', 'POST', { login, password }); setOldPassword(password); setPassword('') })
+    // Pole-pułapka jest niekontrolowane – czytamy je prosto z formularza.
+    const website = String(new FormData(e.currentTarget).get('website') ?? '')
+    await run(async () => {
+      try {
+        await api('/auth/login', 'POST', { login, password, captchaToken, website })
+        setBlockedUntil(null); setOldPassword(password); setPassword('')
+      } catch (err) {
+        if (err instanceof ApiError) setBlockedUntil(blockEnd(err.data))
+        throw err
+      } finally { resetCaptcha() }
+    })
   }
   async function submitPassword(e: FormEvent) {
     e.preventDefault()
     await run(async () => {
-      await api('/auth/change-password', 'POST', { currentPassword: oldPassword, newPassword, confirmNewPassword: confirmPassword })
-      setOldPassword(''); setNewPassword(''); setConfirmPassword('')
+      try {
+        await api('/auth/change-password', 'POST', { currentPassword: oldPassword, newPassword, confirmNewPassword: confirmPassword, captchaToken })
+        setOldPassword(''); setNewPassword(''); setConfirmPassword('')
+      } finally { resetCaptcha() }
     })
   }
   async function saveNote(e: FormEvent) {
@@ -116,12 +159,16 @@ export default function App() {
         {account && <button onClick={() => void run(() => api('/auth/logout', 'POST'))}>Wyloguj</button>}
       </div></header>
     {result && <p role="status" className="status">{result}</p>}
+    {secondsLeft > 0 && <p role="alert" className="status alert">Logowanie zablokowane – spróbuj ponownie za {Math.floor(secondsLeft / 60)}:{String(secondsLeft % 60).padStart(2, '0')}</p>}
     {secret && <section className="secret"><strong>Dane jednorazowe — zapisz bezpiecznie, nie udostępniaj:</strong><pre>{secret}</pre></section>}
 
     {!account && <section className="panel"><h2>Logowanie</h2><form onSubmit={e => void submitLogin(e)}>
       <label>Login<input autoComplete="username" value={login} onChange={e => setLogin(e.target.value)} required /></label>
       <label>Hasło<input type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} required /></label>
-      <button disabled={busy}>Zaloguj</button>
+      {/* Pułapka na boty: pole schowane poza ekranem, człowiek go nie wypełni. */}
+      <div className="hp" aria-hidden="true"><label>Website<input name="website" tabIndex={-1} autoComplete="off" defaultValue="" /></label></div>
+      {captcha}
+      <button disabled={busy || secondsLeft > 0}>Zaloguj</button>
     </form></section>}
 
     {account?.level === 'password' && <section className="panel"><h2>Wymagana zmiana hasła</h2><p>Pierwsza sesja ma ograniczone uprawnienia.</p>
@@ -129,6 +176,7 @@ export default function App() {
         <label>Obecne hasło<input type="password" autoComplete="current-password" value={oldPassword} onChange={e => setOldPassword(e.target.value)} required /></label>
         <label>Nowe hasło (co najmniej 16 znaków)<input type="password" autoComplete="new-password" value={newPassword} onChange={e => setNewPassword(e.target.value)} required minLength={16}/></label>
         <label>Powtórz nowe hasło<input type="password" autoComplete="new-password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} required /></label>
+        {captcha}
         <button disabled={busy}>Zmień hasło</button>
       </form></section>}
 
@@ -160,6 +208,7 @@ export default function App() {
         <label>Obecne<input type="password" value={oldPassword} onChange={e => setOldPassword(e.target.value)} required /></label>
         <label>Nowe<input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} minLength={16} required /></label>
         <label>Potwierdź<input type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} required /></label>
+        {captcha}
         <button disabled={busy}>Zmień hasło</button>
       </form></section>
 
@@ -173,6 +222,8 @@ export default function App() {
       </section>
 
       {isAdmin && <>
+        {events.filter(ev => ev.type === 'CanaryAccount').map(ev => <p key={ev.id} role="alert" className="status alert">
+          ALERT {new Date(ev.attemptedAtUtc).toLocaleString()}: ktoś użył konta-pułapki {ev.login} z IP {ev.ipAddress}</p>)}
         <section className="panel"><h2>Zarządzanie użytkownikami</h2><form className="inline" onSubmit={e => void createUser(e)}>
           <label>Nowy login<input value={newUserLogin} onChange={e => setNewUserLogin(e.target.value)} required /></label>
           <label>Rola<select value={newUserRole} onChange={e => setNewUserRole(e.target.value)}>{roles.map(r => <option key={r}>{r}</option>)}</select></label>
@@ -186,9 +237,17 @@ export default function App() {
           <label>Minimalna długość hasła<input type="number" min="16" max="128" value={settings.minimumPasswordLength} onChange={e => setSettings({...settings, minimumPasswordLength: Number(e.target.value)})} /></label>
           <label>Ważność hasła (dni, 0 = bez limitu)<input type="number" min="0" max="3650" value={settings.passwordValidityDays} onChange={e => setSettings({...settings, passwordValidityDays: Number(e.target.value)})} /></label>
           <label>Bezczynność sesji (minuty)<input type="number" min="5" max="240" value={settings.sessionIdleMinutes} onChange={e => setSettings({...settings, sessionIdleMinutes: Number(e.target.value)})} /></label>
+          <label>Błędne logowania do blokady konta na 15 min<input type="number" min="3" max="20" value={settings.maxFailedLoginAttempts} onChange={e => setSettings({...settings, maxFailedLoginAttempts: Number(e.target.value)})} /></label>
+          <label>Błędne logowania z jednego IP (15 min)<input type="number" min="5" max="1000" value={settings.maxFailedAttemptsPerIp} onChange={e => setSettings({...settings, maxFailedAttemptsPerIp: Number(e.target.value)})} /></label>
           <label className="checkbox"><input type="checkbox" checked={settings.requirePasswordDistance} onChange={e => setSettings({...settings, requirePasswordDistance: e.target.checked})} /> Odległość Levenshteina ≥ 4</label>
           <button disabled={busy}>Zapisz ustawienia</button>
         </form>}</section>
+        <section className="panel"><h2>Zdarzenia bezpieczeństwa (ostatnie 100)</h2>
+          <table><thead><tr><th>Czas</th><th>Typ</th><th>Login</th><th>IP</th></tr></thead><tbody>
+            {events.map(ev => <tr key={ev.id} className={['Honeypot', 'CanaryAccount'].includes(ev.type) ? 'alert' : undefined}>
+              <td>{new Date(ev.attemptedAtUtc).toLocaleString()}</td><td>{ev.type}</td><td>{ev.login}</td><td>{ev.ipAddress}</td></tr>)}
+            {events.length === 0 && <tr><td colSpan={4}>Brak zdarzeń.</td></tr>}
+          </tbody></table></section>
       </>}
     </>}
     <footer>AccessLab · interfejs demonstracyjny · API: <a href="https://localhost:7068/swagger" target="_blank" rel="noreferrer">Swagger</a></footer>

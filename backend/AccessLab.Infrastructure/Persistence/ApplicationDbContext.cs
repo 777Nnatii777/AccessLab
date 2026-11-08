@@ -13,6 +13,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<PasswordHistory> PasswordHistories => Set<PasswordHistory>();
     public DbSet<SecuritySettings> SecuritySettings => Set<SecuritySettings>();
     public DbSet<Note> Notes => Set<Note>();
+    public DbSet<SecurityEvent> SecurityEvents => Set<SecurityEvent>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -42,6 +43,15 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>
         builder.Entity<SecuritySettings>(e =>
         {
             e.Property(s => s.Id).ValueGeneratedNever();
+            e.Property(s => s.MaxFailedLoginAttempts).HasDefaultValue(5);
+            e.Property(s => s.MaxFailedAttemptsPerIp).HasDefaultValue(20);
+        });
+        builder.Entity<SecurityEvent>(e =>
+        {
+            e.Property(x => x.IpAddress).HasMaxLength(64).IsRequired();
+            e.Property(x => x.Login).HasMaxLength(200).IsRequired();
+            e.Property(x => x.Type).HasMaxLength(32).IsRequired();
+            e.HasIndex(x => new { x.IpAddress, x.AttemptedAtUtc });
         });
     }
 }

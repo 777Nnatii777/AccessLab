@@ -21,20 +21,32 @@ public sealed class LoginService : ILoginService
         if (string.IsNullOrWhiteSpace(request.Login) || string.IsNullOrEmpty(request.Password))
             return new(LoginCheckResult.Failed);
         var user = await _users.FindByNameAsync(request.Login);
-        if (user is null || user.IsBlocked || await _users.IsLockedOutAsync(user))
+        if (user is null || user.IsBlocked)
             return new(LoginCheckResult.Failed);
+        if (user.LockoutEnd is { } lockedUntil && lockedUntil > DateTimeOffset.UtcNow)
+            return new(LoginCheckResult.Locked, LockedUntilUtc: lockedUntil);
+
+        var policy = await _db.SecuritySettings.AsNoTracking().FirstOrDefaultAsync();
         if (!await _users.CheckPasswordAsync(user, request.Password))
         {
-            var failed = await _users.AccessFailedAsync(user);
-            if (!failed.Succeeded) throw new InvalidOperationException("Błąd licznika logowań.");
-            return new(LoginCheckResult.Failed);
+            // Limit błędnych logowań: po N porażkach konto blokowane na 15 minut.
+            user.AccessFailedCount++;
+            if (user.AccessFailedCount >= (policy?.MaxFailedLoginAttempts ?? 5))
+            {
+                user.LockoutEnd = DateTimeOffset.UtcNow.AddMinutes(15);
+                user.AccessFailedCount = 0;
+            }
+            if (!(await _users.UpdateAsync(user)).Succeeded)
+                throw new InvalidOperationException("Błąd licznika logowań.");
+            return user.LockoutEnd > DateTimeOffset.UtcNow
+                ? new(LoginCheckResult.Locked, LockedUntilUtc: user.LockoutEnd)
+                : new(LoginCheckResult.Failed);
         }
         if (user.TemporaryPasswordExpiresAtUtc is { } expiry && expiry <= DateTimeOffset.UtcNow)
             return new(LoginCheckResult.Failed);
         if (!(await _users.ResetAccessFailedCountAsync(user)).Succeeded)
             return new(LoginCheckResult.Failed);
 
-        var policy = await _db.SecuritySettings.AsNoTracking().FirstOrDefaultAsync();
         int days = policy?.PasswordValidityDays ?? 90;
         if (!user.MustChangePassword && days > 0 &&
             (user.PasswordChangedAtUtc is null || user.PasswordChangedAtUtc.Value.AddDays(days) <= DateTimeOffset.UtcNow))

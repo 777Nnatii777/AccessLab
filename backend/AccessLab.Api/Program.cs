@@ -1,4 +1,5 @@
 using AccessLab.Api.Authentication;
+using AccessLab.Api.Security;
 using AccessLab.Application.Authentication;
 using AccessLab.Infrastructure.Authentication;
 using AccessLab.Infrastructure.Identity;
@@ -23,9 +24,8 @@ builder.Services.AddIdentityCore<ApplicationUser>(o =>
         o.Password.RequireLowercase = false;
         o.Password.RequireUppercase = false;
         o.Password.RequireNonAlphanumeric = false;
+        // Liczbę prób i blokadę 15 min obsługuje LoginService na podstawie SecuritySettings.
         o.Lockout.AllowedForNewUsers = true;
-        o.Lockout.MaxFailedAccessAttempts = 5;
-        o.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(5);
     })
     .AddRoles<IdentityRole>()
     .AddEntityFrameworkStores<ApplicationDbContext>()
@@ -33,6 +33,8 @@ builder.Services.AddIdentityCore<ApplicationUser>(o =>
 builder.Services.AddScoped<ILoginService, LoginService>();
 builder.Services.AddScoped<ISessionService, SessionService>();
 builder.Services.AddScoped<PasswordPolicyService>();
+builder.Services.AddScoped<SecurityEventService>();
+builder.Services.AddHttpClient<RecaptchaService>();
 builder.Services.AddAntiforgery(o =>
 {
     o.HeaderName = "X-CSRF-TOKEN";
@@ -67,6 +69,20 @@ app.MapControllers();
 
 if (app.Environment.IsDevelopment())
 {
+    // Pomocnicze endpointy dla testu bota (tests/AccessLab.BotTest) – tylko w Development.
+    app.MapGet("/api/dev/security-events", async (DateTimeOffset? since, ApplicationDbContext db) =>
+        await db.SecurityEvents.AsNoTracking()
+            .Where(e => since == null || e.AttemptedAtUtc >= since)
+            .OrderBy(e => e.AttemptedAtUtc).ToListAsync());
+    app.MapPost("/api/dev/reset", async (ApplicationDbContext db) =>
+    {
+        await db.SecurityEvents.ExecuteDeleteAsync();
+        await db.Users.ExecuteUpdateAsync(s => s
+            .SetProperty(u => u.LockoutEnd, (DateTimeOffset?)null)
+            .SetProperty(u => u.AccessFailedCount, 0));
+        return Results.NoContent();
+    });
+
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
     // Migruj jawnie poleceniem dotnet ef database update; nie wykonujemy migracji automatycznie.

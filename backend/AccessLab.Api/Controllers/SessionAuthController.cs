@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using AccessLab.Api.Authentication;
+using AccessLab.Api.Security;
 using AccessLab.Application.Authentication;
 using AccessLab.Infrastructure.Authentication;
 using AccessLab.Infrastructure.Identity;
@@ -22,10 +23,15 @@ public sealed class SessionAuthController : ControllerBase
     private readonly ApplicationDbContext _db;
     private readonly UserManager<ApplicationUser> _users;
     private readonly PasswordPolicyService _policy;
+    private readonly RecaptchaService _captcha;
+    private readonly SecurityEventService _events;
 
     public SessionAuthController(ILoginService login, ISessionService sessions, IAntiforgery csrf,
-        ApplicationDbContext db, UserManager<ApplicationUser> users, PasswordPolicyService policy)
+        ApplicationDbContext db, UserManager<ApplicationUser> users, PasswordPolicyService policy,
+        RecaptchaService captcha, SecurityEventService events)
     {
+        _captcha = captcha;
+        _events = events;
         _login = login;
         _sessions = sessions;
         _csrf = csrf;
@@ -45,9 +51,46 @@ public sealed class SessionAuthController : ControllerBase
     [HttpPost("login")]
     public async Task<IActionResult> Login(LoginRequest request, [FromHeader(Name = "X-CSRF-TOKEN")] string? csrfToken = null)
     {
+        var ip = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        var badLogin = Unauthorized(new { message = "Login lub hasło niepoprawne" });
+
+        // 1. Pułapka na boty: człowiek nie widzi pola "website", bot je wypełnia.
+        if (!string.IsNullOrEmpty(request.Website))
+        {
+            await _events.AddAsync("Honeypot", ip, request.Login);
+            return badLogin;
+        }
+        // 2. Konto-pułapka (canarytoken): każde użycie to alarm.
+        if (_events.TrapSource(request.Login) is { } source)
+        {
+            await _events.CanaryAlertAsync(ip, request.Login, source);
+            return badLogin;
+        }
+        // 3. Limit porażek z jednego IP, niezależnie od loginu (password spraying).
+        if (await _events.IpBlockedUntilAsync(ip) is { } ipBlockedUntil)
+        {
+            await _events.AddAsync("IpLimited", ip, request.Login);
+            return StatusCode(429, new { message = "Za dużo nieudanych prób z Twojego adresu IP.", blockedUntilUtc = ipBlockedUntil });
+        }
+        // 4. CAPTCHA.
+        if (!await _captcha.VerifyAsync(request.CaptchaToken, ip))
+        {
+            await _events.AddAsync("CaptchaFailed", ip, request.Login);
+            return BadRequest(new { message = "Potwierdź, że nie jesteś robotem (reCAPTCHA)." });
+        }
+        // 5. Login i hasło + blokada konta po N błędach.
         var result = await _login.CheckCredentialsAsync(request);
+        if (result.Status == LoginCheckResult.Locked)
+        {
+            await _events.AddAsync("Locked", ip, request.Login);
+            return StatusCode(423, new { message = "Konto zablokowane.", lockedUntilUtc = result.LockedUntilUtc });
+        }
         if (result.Status == LoginCheckResult.Failed || string.IsNullOrEmpty(result.UserId))
-            return Unauthorized(new { message = "Login lub hasło niepoprawne" });
+        {
+            await _events.AddAsync("BadPassword", ip, request.Login);
+            return badLogin;
+        }
+        await _events.AddAsync("Success", ip, request.Login);
         // Revoke any session carried by the browser before replacing its cookie.
         await RevokeCurrentSessionAsync();
         var session = await _sessions.CreateAsync(result.UserId);
@@ -88,6 +131,9 @@ public sealed class SessionAuthController : ControllerBase
     {
         if (User.HasClaim("session_level", "totp"))
             return StatusCode(403, new { message = "Najpierw potwierdź kod TOTP." });
+        var ip = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        if (!await _captcha.VerifyAsync(request.CaptchaToken, ip))
+            return BadRequest(new { message = "Brak poprawnej weryfikacji reCAPTCHA." });
         if (string.IsNullOrEmpty(request.CurrentPassword) ||
             request.NewPassword != request.ConfirmNewPassword)
             return BadRequest(new { message = "Hasła nie są zgodne lub są puste." });

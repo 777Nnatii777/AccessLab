@@ -23,6 +23,8 @@ th, td { border: 1px solid #dfe5ed; padding: 9px; vertical-align: top; text-alig
 th { background: #f1f6fb; color: #24425f; } td input, td select { min-width: 120px !important; }
 td small { display: block; color: #68798b; margin-top: 5px; }
 .note-body { white-space: pre-wrap; max-width: 360px; overflow-wrap: anywhere; }
+.hp { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+.status.alert, tr.alert td { background: #fff0f0; border-color: #e3c0c0; color: #a12222; }
 .checkbox { flex-direction: row; align-items: center; }
 footer { font-size: 12px; color: #68798b; padding: 20px 0 50px; }
 @media(max-width:750px) { header { align-items: start; flex-direction: column; } .panel { padding: 12px; } .container { padding: 12px; } table { min-width: 740px; } }

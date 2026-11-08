@@ -7,4 +7,6 @@ public sealed class SecuritySettings
     public bool RequirePasswordDistance { get; set; } = false;
     public int PasswordValidityDays { get; set; } = 90;
     public int SessionIdleMinutes { get; set; } = 30;
+    public int MaxFailedLoginAttempts { get; set; } = 5;
+    public int MaxFailedAttemptsPerIp { get; set; } = 20;
 }

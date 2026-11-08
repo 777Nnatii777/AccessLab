@@ -1,5 +1,6 @@
-﻿namespace AccessLab.Application.Authentication;
+namespace AccessLab.Application.Authentication;
 
 public record CheckedLogin(
     LoginCheckResult Status,
-    string? UserId = null);
+    string? UserId = null,
+    DateTimeOffset? LockedUntilUtc = null);

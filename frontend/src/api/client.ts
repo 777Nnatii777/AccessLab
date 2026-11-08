@@ -13,7 +13,14 @@ export type Note = {
 }
 export type Settings = {
   minimumPasswordLength: number; requirePasswordDistance: boolean;
-  passwordValidityDays: number; sessionIdleMinutes: number
+  passwordValidityDays: number; sessionIdleMinutes: number;
+  maxFailedLoginAttempts: number; maxFailedAttemptsPerIp: number
+}
+export type SecurityEvent = { id: number; attemptedAtUtc: string; ipAddress: string; login: string; type: string }
+// Błąd z API razem z odpowiedzią serwera (np. lockedUntilUtc przy blokadzie).
+export class ApiError extends Error {
+  data: unknown
+  constructor(message: string, data: unknown) { super(message); this.data = data }
 }
 export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' }
@@ -35,7 +42,7 @@ export async function api<T>(path: string, method = 'GET', body?: unknown): Prom
   if (!response.ok) {
     const message = typeof data === 'object' && data !== null && 'message' in data
       ? String(data.message) : `HTTP ${response.status}`
-    throw new Error(message)
+    throw new ApiError(message, data)
   }
   return data as T
 }

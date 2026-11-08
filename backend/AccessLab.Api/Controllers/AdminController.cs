@@ -14,7 +14,7 @@ namespace AccessLab.Api.Controllers;
 public sealed record CreateUserInput(string Login, string Role);
 public sealed record EditUserInput(string Login, string? Email, string Role);
 public sealed record SettingsInput(int MinimumPasswordLength, bool RequirePasswordDistance,
-    int PasswordValidityDays, int SessionIdleMinutes);
+    int PasswordValidityDays, int SessionIdleMinutes, int MaxFailedLoginAttempts, int MaxFailedAttemptsPerIp);
 
 [ApiController]
 [Route("api/admin")]
@@ -164,17 +164,25 @@ public sealed class AdminController : ControllerBase
     {
         if (input.MinimumPasswordLength is < 16 or > 128 ||
             input.PasswordValidityDays is < 0 or > 3650 ||
-            input.SessionIdleMinutes is < 5 or > 240)
-            return BadRequest(new { message = "Długość: 16–128; ważność: 0–3650 dni; bezczynność: 5–240 minut." });
+            input.SessionIdleMinutes is < 5 or > 240 ||
+            input.MaxFailedLoginAttempts is < 3 or > 20 ||
+            input.MaxFailedAttemptsPerIp is < 5 or > 1000)
+            return BadRequest(new { message = "Długość: 16–128; ważność: 0–3650 dni; bezczynność: 5–240 minut; próby na konto: 3–20; próby z IP: 5–1000." });
         var settings = await _db.SecuritySettings.FindAsync(1);
         if (settings is null) { settings = new SecuritySettings(); _db.SecuritySettings.Add(settings); }
         settings.MinimumPasswordLength = input.MinimumPasswordLength;
         settings.RequirePasswordDistance = input.RequirePasswordDistance;
         settings.PasswordValidityDays = input.PasswordValidityDays;
         settings.SessionIdleMinutes = input.SessionIdleMinutes;
+        settings.MaxFailedLoginAttempts = input.MaxFailedLoginAttempts;
+        settings.MaxFailedAttemptsPerIp = input.MaxFailedAttemptsPerIp;
         await _db.SaveChangesAsync();
         return Ok(settings);
     }
+
+    [HttpGet("security-events")]
+    public async Task<IActionResult> SecurityEvents() => Ok(await _db.SecurityEvents.AsNoTracking()
+        .OrderByDescending(e => e.AttemptedAtUtc).Take(100).ToListAsync());
 
     private static bool IsPermanentAdmin(ApplicationUser u) =>
         string.Equals(u.UserName, "ADMIN", StringComparison.OrdinalIgnoreCase);
